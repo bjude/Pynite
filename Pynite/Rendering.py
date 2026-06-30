@@ -68,6 +68,7 @@ class Renderer:
         self._member_diagrams: Optional[str] = None  # Options: None, 'Fy', 'Fz', 'My', 'Mz', 'Fx', 'Tx'
         self._diagram_scale: float = 30.0
         self._member_csys: bool = False
+        self._expanded_members: bool = False
         self.theme: str = 'default'
 
         # Callback list for post-update customization:
@@ -260,6 +261,15 @@ class Renderer:
     @member_csys.setter
     def member_csys(self, render: bool) -> None:
         self._member_csys = render
+
+    @property
+    def expanded_members(self) -> bool:
+        """Enable or disable rendering of member local coordinate systems."""
+        return self._expanded_members
+
+    @expanded_members.setter
+    def expanded_members(self, render: bool) -> None:
+        self._expanded_members = render
 
     def _calculate_auto_annotation_size(self) -> float:
         """Calculate automatic annotation size as 5% of shortest node distance.
@@ -468,7 +478,10 @@ class Renderer:
                 vis_spring.add_to_plotter(self.plotter)
 
         if self.model.members:
-            vis_members = [VisMember(member, self.theme, self.annotation_size) for member in self.model.members.values()]
+            if self.expanded_members:
+                vis_members = [VisMemberExpanded(member, self.theme, self.annotation_size) for member in self.model.members.values()]
+            else:
+                vis_members = [VisMember(member, self.theme, self.annotation_size) for member in self.model.members.values()]
             for vis_member in vis_members:
                 vis_member.add_to_plotter(self.plotter)
 
@@ -2032,6 +2045,35 @@ class VisMember:
         for release_mesh in self.release_meshes:
             plotter.add_mesh(release_mesh, color=color, line_width=2)
 
+class VisMemberExpanded(VisMember):
+    def _build_geometry(self) -> pv.PolyData:
+        point0 = [self.member.i_node.X, self.member.i_node.Y, self.member.i_node.Z]
+        point1 = [self.member.j_node.X, self.member.j_node.Y, self.member.j_node.Z]
+
+        a = (self.member.section.A / (np.pi * (self.member.section.Iz / self.member.section.Iy)**0.5))**0.5
+        b = a * (self.member.section.Iz / self.member.section.Iy)**0.5
+
+        center = [(a + b) / 2 for a, b in zip(point0, point1)]
+        vec = [b - a for a, b in zip(point0, point1)]
+        length = np.linalg.norm(vec)
+        mesh = pv.Ellipse(a, b, resolution=20)
+        mesh = mesh.rotate_y(90)
+        mesh = mesh.extrude(vector=(length, 0, 0), capping=True)
+        mesh = mesh.translate((-length / 2, 0,0))
+        mesh = mesh.rotate(self.member.T()[:3, :3].T)
+        mesh = mesh.translate(center)
+
+        return mesh
+
+    def add_to_plotter(self, plotter: pv.Plotter) -> None:
+        """Add the member line to the plotter.
+
+        :param pv.Plotter plotter: Plotter to receive the mesh.
+        """
+        color = 'black' if self.theme == 'print' else 'black'
+        plotter.add_mesh(self.mesh, color=color, line_width=2, opacity=0.5)
+        for release_mesh in self.release_meshes:
+            plotter.add_mesh(release_mesh, color=color, line_width=2)
 
 class VisDeformedMember:
     """Visual wrapper for a deformed Member3D polyline."""
